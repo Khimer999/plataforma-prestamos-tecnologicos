@@ -1,5 +1,7 @@
 # Plataforma de Préstamos Tecnológicos
 
+[Abrir la plataforma](https://prestamosing1.alwaysdata.net/)
+
 Proyecto Integrador Ingeniería de Software - Plataforma de préstamo de recursos tecnológicos.
 
 La plataforma permite reservar equipos del inventario, consultar los préstamos propios y revisar solicitudes como administrador. El catálogo y la capacidad salen de `productos` y `productos.stock`. Las reservas confirmadas consumen capacidad durante su franja. La interfaz usa la hora de Bogotá y limita cada préstamo a 72 horas.
