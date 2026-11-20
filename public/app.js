@@ -2,72 +2,6 @@
 
 const MAX_HORAS_PRESTAMO = 72; // Fecha límite prudente: máximo 72 horas (3 días)
 
-const INITIAL_DEVICES = [
-    {
-        id: "dev_PC-001",
-        codigoUnidad: "PC-001",
-        categoria: "Computador",
-        modelo: "Portátil Lenovo ThinkPad i5",
-        sede: "Sede Principal",
-        requiereAutorizacion: false,
-        estado: "Disponible"
-    },
-    {
-        id: "dev_PC-002",
-        codigoUnidad: "PC-002",
-        categoria: "Computador",
-        modelo: "Portátil HP ProBook i5",
-        sede: "Sede Principal",
-        requiereAutorizacion: false,
-        estado: "Disponible"
-    },
-    {
-        id: "dev_PC-003",
-        codigoUnidad: "PC-003",
-        categoria: "Computador",
-        modelo: "Workstation Dell i9 Diseño/Render",
-        sede: "Sede Norte",
-        requiereAutorizacion: true,
-        estado: "Disponible"
-    },
-    {
-        id: "dev_TAB-001",
-        codigoUnidad: "TAB-001",
-        categoria: "Tablet",
-        modelo: "iPad 10ª Gen 64GB",
-        sede: "Sede Principal",
-        requiereAutorizacion: false,
-        estado: "Disponible"
-    },
-    {
-        id: "dev_TAB-002",
-        codigoUnidad: "TAB-002",
-        categoria: "Tablet",
-        modelo: "Samsung Galaxy Tab S9",
-        sede: "Sede Norte",
-        requiereAutorizacion: false,
-        estado: "Disponible"
-    },
-    {
-        id: "dev_CAM-001",
-        codigoUnidad: "CAM-001",
-        categoria: "Cámara",
-        modelo: "Cámara Canon EOS R50 Profesional",
-        sede: "Sede Principal",
-        requiereAutorizacion: true,
-        estado: "Disponible"
-    },
-    {
-        id: "dev_CAM-002",
-        codigoUnidad: "CAM-002",
-        categoria: "Cámara",
-        modelo: "Cámara Sony Alpha a6400 + Trípode",
-        sede: "Sede Norte",
-        requiereAutorizacion: true,
-        estado: "Disponible"
-    }
-];
-
 const state = {
     currentUser: null,
     activeView: "login",
@@ -213,135 +147,6 @@ function clearNotifications() {
     document.getElementById("notification-container").innerHTML = "";
 }
 
-const DEMO_KEY = "prestamos-dispositivos-demo-v1";
-const DEMO_ADMIN = {
-    id: "demo-administrador",
-    username: "Administrador de prueba",
-    nombreCompleto: "Administrador de prueba",
-    rol: "admin"
-};
-
-function createDemoRepository() {
-    let temporaryData = { users: [], loans: [] };
-    const read = () => {
-        try {
-            const raw = sessionStorage.getItem(DEMO_KEY);
-            if (raw) {
-                const data = JSON.parse(raw);
-                if (Array.isArray(data.users) && Array.isArray(data.loans)) return data;
-            }
-        } catch {
-            // La demo también funciona cuando el navegador bloquea el almacenamiento.
-        }
-        return temporaryData;
-    };
-    const write = (data) => {
-        temporaryData = data;
-        try {
-            sessionStorage.setItem(DEMO_KEY, JSON.stringify(data));
-        } catch {
-            // Los cambios continúan disponibles mientras la página siga abierta.
-        }
-    };
-    const profile = ({ hash, salt, ...publicFields }) => publicFields;
-
-    async function passwordHash(password, salt) {
-        if (!globalThis.crypto?.subtle) {
-            throw new Error("Abre el archivo en un navegador moderno o sírvelo desde localhost para registrar cuentas de prueba.");
-        }
-        const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveBits"]);
-        const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", salt: Uint8Array.from(salt), iterations: 600000, hash: "SHA-256" }, key, 256);
-        return Array.from(new Uint8Array(bits), (value) => value.toString(16).padStart(2, "0")).join("");
-    }
-
-    return {
-        demo: true,
-        currentSession: async () => null,
-        loginDemo: async () => DEMO_ADMIN,
-        logout: async () => {},
-        async login(identificador, password) {
-            const user = read().users.find((item) => item.correo === identificador);
-            if (!user || await passwordHash(password, user.salt) !== user.hash) {
-                throw new Error("Verifica el correo o usuario y la contraseña.");
-            }
-            return profile(user);
-        },
-        async register({ password, ...fields }) {
-            if (!globalThis.crypto?.subtle) {
-                throw new Error("Abre el archivo en un navegador moderno o sírvelo desde localhost para registrar cuentas de prueba.");
-            }
-            const salt = Array.from(crypto.getRandomValues(new Uint8Array(16)));
-            const hash = await passwordHash(password, salt);
-            const data = read();
-            if (data.users.some((user) => user.correo === fields.correo)) {
-                throw new Error("Ya existe una cuenta registrada con ese correo.");
-            }
-            if (data.users.some((user) => user.numeroDocumento.toLowerCase() === fields.numeroDocumento.toLowerCase())) {
-                throw new Error("Ya existe una cuenta con ese número de documento.");
-            }
-            data.users.push({ ...fields, hash, salt, id: crypto.randomUUID(), creadoEn: new Date().toISOString() });
-            write(data);
-        },
-        async panel(actor) {
-            const { users, loans } = read();
-            const admin = actor.rol === "admin";
-            const availability = loans.filter((loan) => loan.estado === "Confirmado" && new Date(loan.fechaFin) > new Date())
-                .map(({ dispositivoId, fechaInicio, fechaFin }) => ({ dispositivoId, fechaInicio, fechaFin }));
-            return {
-                devices: INITIAL_DEVICES,
-                users: admin ? [DEMO_ADMIN, ...users.map(profile)] : [],
-                loans: admin ? loans : loans.filter((item) => item.usuarioId === actor.id),
-                availability
-            };
-        },
-        async createLoan(input, actor) {
-            const data = read();
-            const device = INITIAL_DEVICES.find((item) => item.id === input.dispositivoId);
-            if (device?.estado !== "Disponible") throw new Error("El equipo seleccionado ya no está disponible.");
-            const user = data.users.find((item) => item.id === (actor.rol === "admin" ? input.usuarioId : actor.id));
-            if (!user) throw new Error("Selecciona un estudiante o profesor registrado.");
-            const dates = validateLoanDates(input.fechaInicio, input.fechaFin);
-            if (!dates.valid) throw new Error(dates.error);
-            const conflict = findScheduleConflict(data.loans, device.id, input.fechaInicio, input.fechaFin);
-            if (conflict) throw new Error(conflictDescription(conflict));
-
-            const direct = actor.rol === "admin";
-            const pending = !direct && device.requiereAutorizacion;
-            const loan = {
-                ...input,
-                id: crypto.randomUUID(),
-                usuarioId: user.id,
-                creadoPorId: actor.id,
-                creadoEn: new Date().toISOString(),
-                estado: pending ? "Pendiente" : "Confirmado",
-                observacionAdmin: pending ? "En espera de revisión." : direct ? "Confirmado por el administrador." : "Confirmado automáticamente por disponibilidad."
-            };
-            data.loans.unshift(loan);
-            write(data);
-            return loan;
-        },
-        async decideLoan(id, { estado, observacionAdmin }, actor) {
-            if (actor.rol !== "admin") throw new Error("La decisión requiere una cuenta de administrador.");
-            const data = read();
-            const loan = data.loans.find((item) => item.id === id);
-            if (loan?.estado !== "Pendiente") throw new Error("La solicitud ya fue procesada o no existe.");
-            if (estado === "Confirmado") {
-                const dates = validateLoanDates(loan.fechaInicio, loan.fechaFin);
-                if (!dates.valid) throw new Error(dates.error);
-                const device = INITIAL_DEVICES.find((item) => item.id === loan.dispositivoId);
-                if (device?.estado !== "Disponible") throw new Error("El equipo ya no está disponible.");
-                const conflict = findScheduleConflict(data.loans, loan.dispositivoId, loan.fechaInicio, loan.fechaFin);
-                if (conflict) throw new Error(conflictDescription(conflict));
-            } else if (estado !== "Rechazado" || !observacionAdmin) {
-                throw new Error("Escribe el motivo del rechazo.");
-            }
-            const updated = Object.assign(loan, { estado, observacionAdmin });
-            write(data);
-            return updated;
-        }
-    };
-}
-
 function createApiRepository(basePath) {
     async function request(path, method = "GET", body, allowNoSession = false) {
         let response;
@@ -359,32 +164,26 @@ function createApiRepository(basePath) {
         if (allowNoSession && response.status === 401) return null;
         if (response.status === 204) return null;
         const payload = await response.json().catch(() => null);
-        if (!response.ok) throw new Error(payload?.message || `El servicio no pudo completar la operación (${response.status}).`);
+        if (!response.ok) {
+            const error = new Error(payload?.message || `El servicio no pudo completar la operación (${response.status}).`);
+            error.status = response.status;
+            throw error;
+        }
         if (payload === null && path !== "/auth/registro") throw new Error("El servicio devolvió una respuesta no válida.");
         return payload;
     }
 
     return {
-        demo: false,
         currentSession: () => request("/auth/sesion", "GET", undefined, true),
         login: (identificador, password) => request("/auth/sesion", "POST", { identificador, password }),
         logout: () => request("/auth/sesion", "DELETE", undefined, true),
         register: (fields) => request("/auth/registro", "POST", fields),
         panel: () => request("/panel"),
+        updates: () => typeof EventSource === "function" ? new EventSource(`${basePath}/eventos`) : null,
         createLoan: (input) => request("/prestamos", "POST", input),
         decideLoan: (id, updates) => request(`/prestamos/${encodeURIComponent(id)}`, "PATCH", updates)
     };
 }
-
-function createRepository() {
-    const basePath = document.querySelector('meta[name="prestamos-api"]').content.trim();
-    if (!basePath) return createDemoRepository();
-    if (!/^\/[\w-]+(?:\/[\w-]+)*\/?$/.test(basePath)) {
-        throw new Error("La ruta de la API debe ser relativa al mismo sitio, por ejemplo /api.");
-    }
-    return createApiRepository(basePath.replace(/\/$/, ""));
-}
-
 
 function validateLoanDates(startStr, endStr) {
     if (!startStr || !endStr) {
@@ -416,30 +215,6 @@ function validateLoanDates(startStr, endStr) {
     }
 
     return { valid: true, startMs: startDate.getTime(), endMs: endDate.getTime() };
-}
-
-/**
- * Comprueba si un préstamo CONFIRMADO se superpone con el rango solicitado.
- * Permite franjas consecutivas exactas (nuevoInicio === existenteFin o nuevoFin === existenteInicio).
- */
-function findScheduleConflict(loansList, deviceId, newStartStr, newEndStr, ignoreLoanId = null) {
-    const newStart = new Date(newStartStr).getTime();
-    const newEnd = new Date(newEndStr).getTime();
-
-    return loansList.find((loan) => {
-        if (loan.id === ignoreLoanId) return false;
-        if (loan.dispositivoId !== deviceId) return false;
-        if (loan.estado !== "Confirmado") return false;
-
-        const existingStart = new Date(loan.fechaInicio).getTime();
-        const existingEnd = new Date(loan.fechaFin).getTime();
-
-        return newStart < existingEnd && newEnd > existingStart;
-    }) || null;
-}
-
-function conflictDescription(conflict) {
-    return `El equipo tiene una reserva confirmada del ${formatDateReadable(conflict.fechaInicio)} al ${formatDateReadable(conflict.fechaFin)}. Elige otro horario o equipo.`;
 }
 
 function getDeviceById(id) {
@@ -575,6 +350,110 @@ function renderCategoryFilters(devices) {
     }));
 }
 
+function freeUnitsForInterval(stock, intervals, start, end) {
+    const events = [];
+    for (const interval of intervals) {
+        const from = Math.max(start, Date.parse(interval.fechaInicio));
+        const until = Math.min(end, Date.parse(interval.fechaFin));
+        if (from < until) events.push([from, 1], [until, -1]);
+    }
+    events.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    let occupied = 0;
+    let peak = 0;
+    for (const [, change] of events) {
+        occupied += change;
+        peak = Math.max(peak, occupied);
+    }
+    return Math.max(0, stock - peak);
+}
+
+function renderUserCatalog() {
+    const siteSelect = document.getElementById("user-catalog-site");
+    const selectedSite = siteSelect.value;
+    const sites = [...new Set(state.devices.map((device) => device.sede).filter(Boolean))].sort((a, b) => a.localeCompare(b, "es"));
+    if (siteSelect.dataset.sites !== JSON.stringify(sites)) {
+        siteSelect.dataset.sites = JSON.stringify(sites);
+        siteSelect.replaceChildren(new Option("Todas las sedes", ""), ...sites.map((site) => new Option(site, site)));
+        siteSelect.value = sites.includes(selectedSite) ? selectedSite : "";
+    }
+    const selectedStart = document.getElementById("user-loan-start").value;
+    const selectedEnd = document.getElementById("user-loan-end").value;
+    const start = Date.parse(`${selectedStart}-05:00`);
+    const end = Date.parse(`${selectedEnd}-05:00`);
+    const validInterval = Number.isFinite(start) && end > start;
+    const availableOnly = document.getElementById("user-catalog-available");
+    availableOnly.disabled = !validInterval;
+    document.getElementById("user-catalog-period").textContent = validInterval
+        ? `Franja en hora de Bogotá: ${formatDateReadable(`${selectedStart}-05:00`)} → ${formatDateReadable(`${selectedEnd}-05:00`)}`
+        : "Selecciona un inicio y una fecha límite de entrega válidos en el formulario.";
+
+    renderCategoryFilters(state.devices);
+    const matchingDevices = state.devices.filter((device) => (!siteSelect.value || device.sede === siteSelect.value)
+        && (state.userCategoryFilter === "Todos" || device.categoria === state.userCategoryFilter));
+    const now = Date.now();
+    const intervalsByDevice = new Map();
+    for (const reservation of state.availability) {
+        if (Date.parse(reservation.fechaFin) <= now) continue;
+        const key = String(reservation.dispositivoId);
+        if (!intervalsByDevice.has(key)) intervalsByDevice.set(key, []);
+        intervalsByDevice.get(key).push(reservation);
+    }
+
+    const rows = matchingDevices.map((device) => {
+        const active = device.estado === "Disponible";
+        const stock = Number.isInteger(device.unidades) ? Math.max(0, device.unidades) : (active ? 1 : 0);
+        const reservations = intervalsByDevice.get(String(device.id)) || [];
+        const free = active && validInterval ? freeUnitsForInterval(stock, reservations, start, end) : 0;
+        const canRequest = active && stock > 0 && (!validInterval || free > 0);
+        if (availableOnly.checked && validInterval && !canRequest) return "";
+
+        const reservationsHtml = reservations.length
+            ? [...reservations].sort((a, b) => Date.parse(a.fechaInicio) - Date.parse(b.fechaInicio)).map((reservation) => `
+                <div class="text-xs bg-slate-100 text-slate-700 px-2 py-1 rounded mb-1">
+                    ${escapeHtml(formatDateReadable(reservation.fechaInicio))} → ${escapeHtml(formatDateReadable(reservation.fechaFin))}
+                </div>
+            `).join("")
+            : `<span class="text-xs text-slate-500">Sin reservas confirmadas</span>`;
+        let availabilityLabel = "Fuera de servicio";
+        let availabilityClass = "text-red-600";
+        if (stock === 0) {
+            availabilityLabel = "Sin existencias";
+        } else if (active && !validInterval) {
+            availabilityLabel = "Disponible para solicitar";
+            availabilityClass = "text-emerald-700";
+        } else if (active && free === 0) {
+            availabilityLabel = "Ocupado en la franja elegida";
+            availabilityClass = "text-amber-800";
+        } else if (active) {
+            availabilityLabel = `${free} ${free === 1 ? "unidad libre" : "unidades libres"} de ${stock}`;
+            availabilityClass = "text-emerald-700";
+        }
+        const approval = device.requiereAutorizacion
+            ? `<span class="inline-block px-2 py-0.5 rounded-md text-xs font-semibold bg-amber-100 text-amber-800">Requiere autorización</span>`
+            : `<span class="inline-block px-2 py-0.5 rounded-md text-xs font-semibold bg-sky-100 text-poli-azul">Automática</span>`;
+        const action = canRequest
+            ? `<button type="button" data-select-device="${escapeHtml(device.id)}"
+                class="btn-quick-select px-3 py-1.5 rounded-lg bg-poli-cian hover:bg-poli-cianHover text-white text-xs font-semibold transition cursor-pointer">Solicitar</button>`
+            : `<span class="text-xs text-slate-500">No disponible</span>`;
+
+        return `
+            <tr class="hover:bg-slate-50 transition">
+                <td class="py-3 px-4 font-bold text-poli-azul whitespace-nowrap">${escapeHtml(device.codigoUnidad)}</td>
+                <td class="py-3 px-4 whitespace-nowrap">${escapeHtml(device.categoria)}</td>
+                <td class="py-3 px-4">${escapeHtml(device.modelo)}<div class="text-xs text-slate-500">${stock} ${stock === 1 ? "unidad" : "unidades"} en inventario</div></td>
+                <td class="py-3 px-4 whitespace-nowrap text-slate-600">${escapeHtml(device.sede)}</td>
+                <td class="py-3 px-4 whitespace-nowrap">${approval}</td>
+                <td class="py-3 px-4 min-w-[210px]"><p class="text-xs font-semibold mb-1 ${availabilityClass}">${availabilityLabel}</p>${reservationsHtml}</td>
+                <td class="py-3 px-4 text-right whitespace-nowrap">${action}</td>
+            </tr>
+        `;
+    }).join("");
+
+    document.getElementById("user-catalog-tbody").innerHTML = rows || `
+        <tr><td colspan="7" class="py-6 px-4 text-center text-slate-500">No hay dispositivos que coincidan con los filtros.</td></tr>
+    `;
+}
+
 function renderUserPanel() {
     const selectDevice = document.getElementById("user-loan-device");
     const currentSelected = selectDevice.value;
@@ -592,62 +471,7 @@ function renderUserPanel() {
 
     setDefaultDateInputs("user-loan-start", "user-loan-end");
 
-    // Catálogo con filtro por categoría
-    renderCategoryFilters(availableDevices);
-    const filteredDevices = state.userCategoryFilter === "Todos"
-        ? availableDevices
-        : availableDevices.filter((d) => d.categoria === state.userCategoryFilter);
-
-    const nowMs = Date.now();
-    const catalogTbody = document.getElementById("user-catalog-tbody");
-
-    if (filteredDevices.length === 0) {
-        catalogTbody.innerHTML = `
-            <tr>
-                <td colspan="7" class="py-6 px-4 text-center text-slate-500">
-                    No hay dispositivos disponibles en esta categoría.
-                </td>
-            </tr>
-        `;
-    } else {
-        catalogTbody.innerHTML = filteredDevices.map((d) => {
-            const activeConfirmed = state.availability
-                .filter((loan) => loan.dispositivoId === d.id && new Date(loan.fechaFin).getTime() > nowMs)
-                .sort((a, b) => new Date(a.fechaInicio) - new Date(b.fechaInicio));
-
-            const occupiedHtml = activeConfirmed.length > 0
-                ? activeConfirmed.map((r) => `
-                    <div class="text-xs bg-slate-100 text-slate-700 px-2 py-1 rounded mb-1">
-                        ${escapeHtml(formatDateReadable(r.fechaInicio))} → ${escapeHtml(formatDateReadable(r.fechaFin))}
-                    </div>
-                `).join("")
-                : `<span class="text-xs text-emerald-700 font-medium">Sin reservas confirmadas</span>`;
-
-            const approvalTag = d.requiereAutorizacion
-                ? `<span class="inline-block px-2 py-0.5 rounded-md text-xs font-semibold bg-amber-100 text-amber-800">Requiere autorización</span>`
-                : `<span class="inline-block px-2 py-0.5 rounded-md text-xs font-semibold bg-sky-100 text-poli-azul">Automática</span>`;
-
-            return `
-                <tr class="hover:bg-slate-50 transition">
-                    <td class="py-3 px-4 font-bold text-poli-azul whitespace-nowrap">${escapeHtml(d.codigoUnidad)}</td>
-                    <td class="py-3 px-4 whitespace-nowrap">${escapeHtml(d.categoria)}</td>
-                    <td class="py-3 px-4">${escapeHtml(d.modelo)}${Number.isInteger(d.unidades) ? `<div class="text-xs text-slate-500">${d.unidades} ${d.unidades === 1 ? "unidad" : "unidades"} en inventario</div>` : ""}</td>
-                    <td class="py-3 px-4 whitespace-nowrap text-slate-600">${escapeHtml(d.sede)}</td>
-                    <td class="py-3 px-4 whitespace-nowrap">${approvalTag}</td>
-                    <td class="py-3 px-4 min-w-[210px]">${occupiedHtml}</td>
-                    <td class="py-3 px-4 text-right whitespace-nowrap">
-                        <button
-                            type="button"
-                            data-select-device="${escapeHtml(d.id)}"
-                            class="btn-quick-select px-3 py-1.5 rounded-lg bg-poli-cian hover:bg-poli-cianHover text-white text-xs font-semibold transition cursor-pointer"
-                        >
-                            Solicitar
-                        </button>
-                    </td>
-                </tr>
-            `;
-        }).join("");
-    }
+    renderUserCatalog();
 
     // Únicamente los préstamos del usuario autenticado
     const myLoans = state.loans.filter((l) => l.usuarioId === state.currentUser.id);
@@ -900,12 +724,18 @@ function renderAdminPanel() {
 
 const el = (id) => document.getElementById(id);
 const value = (id) => el(id).value;
-let repository;
+const repository = createApiRepository("/api");
 let busy = false;
+let panelGeneration = 0;
+let refreshing = false;
+let refreshTimer;
+let offlinePoll;
+let eventStream;
 
 async function runAction(control, action) {
     if (busy) return;
     busy = true;
+    panelGeneration += 1;
     control.disabled = true;
     clearNotifications();
     try {
@@ -926,10 +756,75 @@ function onSubmit(id, action) {
 }
 
 async function showPanel(user) {
-    Object.assign(state, await repository.panel(user));
+    Object.assign(state, await repository.panel());
     state.currentUser = user;
     switchView(user.rol === "admin" ? "admin" : "user");
+    startUpdates();
 }
+
+function queuePanelRefresh(delay = 150 + Math.floor(Math.random() * 650)) {
+    if (!state.currentUser || document.hidden || refreshTimer !== undefined) return;
+    refreshTimer = setTimeout(() => {
+        refreshTimer = undefined;
+        void refreshPanel();
+    }, delay);
+}
+
+async function refreshPanel() {
+    const user = state.currentUser;
+    if (!user || document.hidden) return;
+    if (busy || refreshing || document.activeElement?.id.startsWith("obs-")) {
+        queuePanelRefresh(600);
+        return;
+    }
+    const generation = panelGeneration;
+    refreshing = true;
+    try {
+        const snapshot = await repository.panel();
+        if (user !== state.currentUser) return;
+        if (generation !== panelGeneration || busy || document.activeElement?.id.startsWith("obs-")) {
+            queuePanelRefresh(600);
+            return;
+        }
+        const notes = [...el("admin-pending-tbody").querySelectorAll('[id^="obs-"]')].map(({ id, value }) => [id, value]);
+        Object.assign(state, snapshot);
+        renderActiveView();
+        for (const [id, note] of notes) {
+            if (el(id)) el(id).value = note;
+        }
+        el("db-status-badge").textContent = "Conexión mediante API";
+    } catch (error) {
+        if (user !== state.currentUser || generation !== panelGeneration) return;
+        if (error.status === 401) clearSession("La sesión venció. Ingresa de nuevo.");
+        else el("db-status-badge").textContent = "Reconectando al servidor";
+    } finally {
+        refreshing = false;
+    }
+}
+
+function stopUpdates() {
+    eventStream?.close();
+    eventStream = null;
+    clearTimeout(refreshTimer);
+    refreshTimer = undefined;
+    clearInterval(offlinePoll);
+}
+
+function startUpdates() {
+    stopUpdates();
+    let version;
+    eventStream = repository.updates();
+    eventStream?.addEventListener("cambio", (event) => {
+        if (event.data === version) return;
+        version = event.data;
+        queuePanelRefresh();
+    });
+    offlinePoll = setInterval(() => {
+        if (!eventStream || eventStream.readyState !== 1) queuePanelRefresh();
+    }, 12_000);
+}
+
+document.addEventListener("visibilitychange", () => queuePanelRefresh(0));
 
 function applySavedLoan(loan) {
     state.loans = [loan, ...state.loans.filter((item) => item.id !== loan.id)]
@@ -944,13 +839,6 @@ onSubmit("form-login", async () => {
     await showPanel(user);
     el("form-login").reset();
     showNotification(`Bienvenido(a), ${user.nombreCompleto}.`, "success");
-});
-
-el("btn-demo-admin").addEventListener("click", (event) => {
-    void runAction(event.currentTarget, async () => {
-        await showPanel(await repository.loginDemo());
-        el("form-login").reset();
-    });
 });
 
 el("reg-password").addEventListener("input", updatePasswordChecklistUI);
@@ -1094,6 +982,9 @@ function bindFilter(id, selector, dataKey, stateKey) {
 }
 
 bindFilter("user-category-filters", ".cat-filter-btn", "cat", "userCategoryFilter");
+for (const id of ["user-catalog-site", "user-catalog-available", "user-loan-start", "user-loan-end"]) {
+    document.getElementById(id).addEventListener("change", renderUserCatalog);
+}
 bindFilter("admin-status-filters", ".status-filter-btn", "status", "adminStatusFilter");
 
 for (const [id, view] of [["link-go-register", "register"], ["link-go-login", "login"], ["link-go-login-top", "login"]]) {
@@ -1105,39 +996,52 @@ for (const [id, view] of [["link-go-register", "register"], ["link-go-login", "l
     });
 }
 
+function clearSession(message) {
+    stopUpdates();
+    state.currentUser = null;
+    Object.assign(state, { devices: [], users: [], loans: [], availability: [] });
+    el("form-user-loan").reset();
+    el("form-admin-loan").reset();
+    el("user-loan-device").dispatchEvent(new Event("change"));
+    for (const id of ["user-loans-tbody", "user-catalog-tbody", "admin-pending-tbody", "admin-users-tbody", "admin-all-loans-tbody"]) {
+        el(id).replaceChildren();
+    }
+    switchView("login");
+    el("login-identificador").focus();
+    showNotification(message, "info");
+}
+
 el("btn-logout").addEventListener("click", (event) => {
     void runAction(event.currentTarget, async () => {
         await repository.logout();
-        state.currentUser = null;
-        Object.assign(state, { devices: [], users: [], loans: [], availability: [] });
-        el("form-user-loan").reset();
-        el("form-admin-loan").reset();
-        el("user-loan-device").dispatchEvent(new Event("change"));
-        for (const id of ["user-loans-tbody", "user-catalog-tbody", "admin-pending-tbody", "admin-users-tbody", "admin-all-loans-tbody"]) {
-            el(id).replaceChildren();
-        }
-        switchView("login");
-        el("login-identificador").focus();
-        showNotification("Sesión cerrada.", "info");
+        clearSession("Sesión cerrada.");
     });
 });
 
+function launchMessage(message, retry = false) {
+    el("loading-spinner").classList.add("hidden");
+    el("loading-status").textContent = message;
+    el("btn-retry-launch").classList.toggle("hidden", !retry);
+}
+
+el("btn-retry-launch").addEventListener("click", () => window.location.reload());
+
 async function start() {
+    if (!["http:", "https:"].includes(window.location.protocol)) {
+        launchMessage("Abre la dirección web de la plataforma para iniciar sesión y guardar datos en MariaDB.");
+        el("db-status-badge").textContent = "Acceso desde el servidor";
+        return;
+    }
     try {
-        repository = createRepository();
-        el("demo-access").classList.toggle("hidden", !repository.demo);
-        el("demo-register-note").classList.toggle("hidden", !repository.demo);
-        el("db-status-badge").textContent = repository.demo ? "Modo de prueba local" : "Conexión mediante API";
         const user = await repository.currentSession();
         if (user) await showPanel(user);
         else switchView("login");
-    } catch (error) {
-        switchView("login");
-        if (!repository) el("form-login").querySelector('button[type="submit"]').disabled = true;
-        showNotification(error.message, "error");
-    } finally {
+        el("db-status-badge").textContent = "Conexión mediante API";
         el("loading-view").classList.add("hidden");
         el("app-main").classList.remove("hidden");
+    } catch {
+        launchMessage("La conexión al servidor está pendiente. Verifica la dirección de la plataforma e inténtalo de nuevo.", true);
+        el("db-status-badge").textContent = "Conexión pendiente";
     }
 }
 

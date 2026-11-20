@@ -4,9 +4,13 @@ Proyecto Integrador Ingeniería de Software - Plataforma de préstamo de recurso
 
 La plataforma permite reservar equipos del inventario, consultar los préstamos propios y revisar solicitudes como administrador. El catálogo y la capacidad salen de `productos` y `productos.stock`. Las reservas confirmadas consumen capacidad durante su franja. La interfaz usa la hora de Bogotá y limita cada préstamo a 72 horas.
 
-## Probar la interfaz
+## Acceso y publicación
 
-Extrae el ZIP completo y abre `public/index.html` en un navegador moderno. Puedes registrar un estudiante con datos ficticios y entrar al panel con **Entrar como administrador de prueba**. En este modo, los datos viven en la pestaña del navegador.
+Abre la dirección HTTPS del servidor para que tus registros y préstamos queden en MariaDB. Cada persona puede volver a entrar con su cuenta desde cualquier dispositivo. [Guía de publicación gratuita](docs/publicacion.md)
+
+## Alcance del incremento 1
+
+Se implementan el registro e inicio de sesión de estudiantes y docentes, el catálogo por código físico, categoría, sede y franja de Bogotá, el historial individual y la coordinación de préstamos. Los equipos de aprobación automática se confirman por disponibilidad. Los equipos especializados quedan pendientes para el administrador, que puede aprobar, rechazar con motivo o crear un préstamo directo. Los cambios confirmados se notifican a los paneles conectados.
 
 ## Conectar con MySQL o MariaDB
 
@@ -20,6 +24,7 @@ Necesitas Node.js 22.9.0 o superior y una instancia de MySQL 8.0.29 o superior, 
    USE inventario_tecnosoluciones;
    SOURCE sql/01-inventario.sql;
    SOURCE sql/02-prestamos.sql;
+   SOURCE sql/04-catalogo-inicial.sql;
    ```
 
 2. Copia `.env.example` como `.env`. Completa `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER` y `DB_PASSWORD` con una cuenta de aplicación. `DB_NAME` debe coincidir con la base seleccionada en el paso anterior. Mantén `.env` fuera del repositorio.
@@ -31,15 +36,17 @@ Necesitas Node.js 22.9.0 o superior y una instancia de MySQL 8.0.29 o superior, 
    npm start
    ```
 
+   Para preparar cuentas predeterminadas, ejecuta `npm run cuentas -- --archivo ../accesos-iniciales.json`. Con `--evaluacion` se crean además una cuenta de estudiante y una de docente con datos ficticios. El comando genera claves distintas en un archivo privado fuera del repositorio y conserva las claves existentes al repetirlo.
+
 4. Abre [http://127.0.0.1:3000](http://127.0.0.1:3000). El servidor activa la API al entregar la página y guarda los préstamos en la base configurada. Abre el sitio por esa dirección con los valores predeterminados de `HOST`, `PORT` y `APP_ORIGIN`. Ajusta las tres variables si cambias la dirección. Para un despliegue remoto, sirve el sitio por HTTPS y configura `APP_ORIGIN` con su URL pública exacta.
 
 ## Catálogo y datos
 
 `01-inventario.sql` conserva las tablas y rutinas de inventario del archivo aportado, con instalación idempotente. `02-prestamos.sql` añade la configuración del catálogo, los perfiles de préstamo, las reservas y las sesiones. El catálogo considera los productos activos y utiliza la sede, categoría y regla de aprobación definidas en `prestamos_catalogo` cuando existe esa configuración. Los productos con varias unidades pueden atender reservas simultáneas hasta agotar su stock. Las reservas que terminan cuando comienza otra permiten reutilizar la misma unidad.
 
-En una base de prueba vacía, puedes cargar los equipos de ejemplo después de las dos migraciones con `SOURCE sql/03-catalogo-demostracion.sql;`. Las cuentas se crean en el formulario de registro o mediante el comando de administrador.
+`04-catalogo-inicial.sql` incorpora 24 equipos ficticios con códigos físicos distintos, en dos sedes y cuatro categorías. El script conserva los equipos existentes y puede ejecutarse varias veces.
 
-Ejecuta las migraciones con una cuenta de instalación. Para la cuenta del servidor, concede `SELECT` sobre `roles`, `usuarios`, `productos`, `prestamos_perfiles` y `prestamos_catalogo`, `INSERT` sobre `usuarios` y `prestamos_perfiles`, `SELECT`, `INSERT` y `UPDATE` sobre `prestamos`, y `SELECT`, `INSERT` y `DELETE` sobre `prestamos_sesiones`. En MySQL concede también `UPDATE` sobre `productos` para permitir la lectura con bloqueo `FOR UPDATE`. Las reservas se escriben en `prestamos` y la plataforma consulta el stock registrado por el inventario. [Lecturas con bloqueo en MySQL](https://dev.mysql.com/doc/refman/8.0/en/innodb-locking-reads.html)
+Ejecuta las migraciones con una cuenta de instalación. Para actualizar una base existente, vuelve a ejecutar `02-prestamos.sql` para añadir la revisión de sincronización. Para la cuenta del servidor, concede `SELECT` sobre `roles`, `usuarios`, `productos`, `prestamos_perfiles` y `prestamos_catalogo`, `INSERT` sobre `usuarios` y `prestamos_perfiles`, `SELECT`, `INSERT` y `UPDATE` sobre `prestamos`, y `SELECT`, `INSERT` y `DELETE` sobre `prestamos_sesiones`. Concede `SELECT` y `UPDATE` sobre `prestamos_revision`. En MySQL concede también `UPDATE` sobre `productos` para permitir la lectura con bloqueo `FOR UPDATE`. Las reservas se escriben en `prestamos` y la plataforma consulta el stock registrado por el inventario. [Lecturas con bloqueo en MySQL](https://dev.mysql.com/doc/refman/8.0/en/innodb-locking-reads.html)
 
 Si el proveedor exige un certificado para TLS, configura `DB_TLS_CA_FILE` con la ruta al certificado de la entidad emisora.
 
@@ -47,7 +54,7 @@ El fondo de nebulosa de `public/assets/nebula.webp` fue generado para esta inter
 
 ## Acceso desde varios dispositivos
 
-Sirve la aplicación en una dirección HTTPS accesible para los dispositivos y usa esa dirección como `APP_ORIGIN`. Todos los procesos de la API deben usar la misma base MariaDB o MySQL. Las cuentas, las sesiones y los préstamos se guardan allí. Cada dispositivo inicia su propia sesión. El acceso al archivo `public/index.html` sigue siendo la demostración independiente del navegador.
+Sirve la aplicación en una dirección HTTPS accesible para los dispositivos y usa esa dirección como `APP_ORIGIN`. Todos los procesos de la API deben usar la misma base MariaDB o MySQL. Las cuentas, las sesiones y los préstamos se conservan al reiniciar el servidor web. Cada dispositivo inicia su propia sesión y recibe actualizaciones automáticas desde el servidor.
 
 La API limita el trabajo con contraseñas y la cantidad de escrituras simultáneas para conservar conexiones de lectura. Si la cola se llena o vence, responde `503` con un aviso de servicio ocupado. Al confirmar un préstamo, el bloqueo del producto en InnoDB hace que todos los procesos comprueben el stock en orden. Una franja sin unidades disponibles responde `409`.
 

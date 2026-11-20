@@ -56,12 +56,17 @@ export function createPool(env = process.env, limits = readLimits(env)) {
 }
 
 export async function checkSchema(pool) {
-    const tables = ['roles', 'usuarios', 'productos', 'prestamos_perfiles', 'prestamos_catalogo', 'prestamos', 'prestamos_sesiones'];
+    const tables = ['roles', 'usuarios', 'productos', 'prestamos_perfiles', 'prestamos_catalogo', 'prestamos', 'prestamos_sesiones', 'prestamos_revision'];
     const [rows] = await pool.execute(`SELECT TABLE_NAME AS name, ENGINE AS engine FROM information_schema.TABLES
         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN (${tables.map(() => '?').join(', ')})`, tables);
     if (rows.length !== tables.length || rows.some(({ engine }) => engine !== 'InnoDB')) {
         throw new Error('Importa los scripts SQL y verifica que sus tablas usen InnoDB.');
     }
+}
+
+async function markChanged(connection) {
+    const [result] = await connection.execute('UPDATE prestamos_revision SET version = version + 1 WHERE id = 1');
+    if (result.affectedRows !== 1) throw new Error('Ejecuta nuevamente sql/02-prestamos.sql para inicializar la revisión.');
 }
 
 async function transaction(pool, action) {
@@ -144,6 +149,7 @@ export function createRepository(pool) {
                 await connection.execute(`INSERT INTO prestamos_perfiles
                     (id_usuario, correo, nombre_completo, tipo_documento, numero_documento, codigo_institucional, facultad_programa, creado_en)
                     VALUES (?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(3))`, [id, ...profile]);
+                await markChanged(connection);
             });
         },
         async login(body, previousToken) {
@@ -189,6 +195,10 @@ export function createRepository(pool) {
         },
         async clearExpiredSessions() {
             await pool.execute('DELETE FROM prestamos_sesiones WHERE vence_en <= UTC_TIMESTAMP(3)');
+        },
+        async revision() {
+            const [[row]] = await pool.execute('SELECT CAST(version AS CHAR) AS version FROM prestamos_revision WHERE id = 1');
+            return row?.version ?? null;
         },
         async users() {
             const [rows] = await pool.execute(`SELECT ${profileColumns} FROM ${profileTables} WHERE u.estado = 1 ORDER BY nombreCompleto`);
@@ -238,6 +248,7 @@ export function createRepository(pool) {
                     (id_usuario, id_producto, fecha_inicio, fecha_fin, motivo_solicitud, estado, observacion_admin, creado_por, creado_en)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(3))`, [requester, id, start, end, reason, status, note, actor.id]);
                 const [[loan]] = await connection.execute(`${loanDetails} WHERE l.id_prestamo = ?`, [result.insertId]);
+                await markChanged(connection);
                 return loan;
             });
         },
@@ -263,6 +274,7 @@ export function createRepository(pool) {
                 await connection.execute(`UPDATE prestamos SET estado = ?, observacion_admin = ?, decidido_por = ?, decidido_en = UTC_TIMESTAMP(3)
                     WHERE id_prestamo = ?`, [status, note || 'Aprobado por el administrador.', actor.id, loanId]);
                 const [[updated]] = await connection.execute(`${loanDetails} WHERE l.id_prestamo = ?`, [loanId]);
+                await markChanged(connection);
                 return updated;
             });
         }

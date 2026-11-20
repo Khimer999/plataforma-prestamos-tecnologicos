@@ -458,10 +458,6 @@ body[data-view="login"] #app-main:not(.hidden) { display: flex; align-items: cen
     padding: .28rem .38rem;
 }
 .access-create #link-go-register:hover, #view-register #link-go-login:hover, #view-register #link-go-login-top:hover { color: #bbfffc; }
-.demo-access { margin-top: 1.15rem; padding-top: 1rem; border-top: 1px solid #31506c; text-align: center; }
-.demo-access p { margin: 0 0 .47rem; color: #a8bfd2; font-size: .82rem; }
-.demo-access button { padding: .48rem .65rem; border: 1px solid #537fa2; border-radius: .55rem; font-size: .83rem; color: #d8ecfa; }
-.demo-access button:hover { background: #173350; }
 
 #view-register { max-width: 49rem; margin-block: clamp(0rem, 1.6vw, 1rem); }
 #view-register > .bg-white { padding: clamp(1.35rem, 3.6vw, 2.6rem); border-color: #599dc092; }
@@ -471,7 +467,6 @@ body[data-view="login"] #app-main:not(.hidden) { display: flex; align-items: cen
 #view-register .bg-slate-50 { background: #0b2239; }
 #view-register .text-red-500, #view-register .text-red-600 { color: #ffb3b8; }
 #view-register .text-emerald-700 { color: #8cf2d0; }
-#demo-register-note { color: #c4e2f5; background: #102e4b; border: 1px solid #315e83; }
 body[data-view="login"] .site-footer, body[data-view="register"] .site-footer {
     background: #04152a78;
     color: #c7dbea;

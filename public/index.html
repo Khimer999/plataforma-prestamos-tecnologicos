@@ -7,7 +7,6 @@
     <meta name="description" content="Reserva computadores, cámaras y tablets para tus actividades académicas.">
     <meta name="theme-color" content="#081729">
 
-    <meta name="prestamos-api" content="">
     <link rel="stylesheet" href="./app.css">
 </head>
 <body data-view="login" class="bg-poli-fondo text-slate-800 font-sans min-h-screen flex flex-col">
@@ -54,8 +53,9 @@
 
     <!-- Pantalla de carga inicial -->
     <div id="loading-view" class="flex-1 flex flex-col items-center justify-center p-8 text-center">
-        <div class="w-10 h-10 border-4 border-poli-cian border-t-poli-azul rounded-full animate-spin mb-4"></div>
-        <p class="text-sm font-medium text-slate-600">Cargando el sistema de préstamos…</p>
+        <div id="loading-spinner" class="w-10 h-10 border-4 border-poli-cian border-t-poli-azul rounded-full animate-spin mb-4"></div>
+        <p id="loading-status" class="text-sm font-medium text-slate-600" role="status">Cargando el sistema de préstamos…</p>
+        <button id="btn-retry-launch" type="button" class="hidden mt-4 px-4 py-2 rounded-lg bg-poli-cian text-white text-sm font-semibold">Volver a conectar</button>
     </div>
 
     <noscript><p class="mx-auto p-4 text-center">Activa JavaScript para usar el sistema de préstamos.</p></noscript>
@@ -111,10 +111,6 @@
                 </form>
 
                 <p class="access-create"><button id="link-go-register" type="button">Crear cuenta</button></p>
-                <div id="demo-access" class="demo-access hidden">
-                    <p>Modo de prueba. Usa datos ficticios al crear una cuenta.</p>
-                    <button id="btn-demo-admin" type="button">Entrar como administrador de prueba</button>
-                </div>
             </div>
         </section>
 
@@ -137,7 +133,6 @@
                     Completa tus datos académicos. Las cuentas nuevas se registran como <strong>Estudiante</strong> o <strong>Profesor</strong>, y tu correo y contraseña serán tus credenciales de inicio de sesión.
                 </p>
 
-                <p id="demo-register-note" class="hidden mb-4 rounded-lg bg-amber-50 p-3 text-sm text-amber-800">Para esta prueba, usa un correo y un número de documento ficticios.</p>
                 <form id="form-register" class="space-y-4" novalidate>
                     <div>
                         <label for="reg-nombre" class="block text-sm font-semibold text-poli-azul mb-1">
@@ -423,12 +418,26 @@
             <div class="bg-white rounded-xl shadow-sm border-t-4 border-poli-azul p-5 sm:p-6">
                 <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
                     <div>
-                        <h2 class="text-lg font-bold text-poli-azul">Catálogo de dispositivos disponibles</h2>
-                        <p class="text-xs text-slate-500">Revisa los horarios ya ocupados antes de elegir tu fecha.</p>
+                        <h2 class="text-lg font-bold text-poli-azul">Catálogo de dispositivos</h2>
+                        <p class="text-xs text-slate-500">Consulta las unidades por categoría, sede y horario.</p>
                     </div>
 
                     <!-- Filtro por categoría -->
                     <div id="user-category-filters" class="flex flex-wrap gap-2" aria-label="Filtrar catálogo por categoría"></div>
+                </div>
+
+                <div class="mb-4 space-y-2">
+                    <div class="flex flex-wrap items-center gap-3">
+                        <label for="user-catalog-site" class="text-sm font-semibold text-poli-azul">Sede</label>
+                        <select id="user-catalog-site" class="px-3 py-2 border border-slate-300 rounded-lg bg-white text-sm" aria-describedby="user-catalog-period">
+                            <option value="">Todas las sedes</option>
+                        </select>
+                        <label class="inline-flex items-center gap-2 text-sm">
+                            <input type="checkbox" id="user-catalog-available" aria-describedby="user-catalog-period">
+                            Solo disponibles en el horario elegido
+                        </label>
+                    </div>
+                    <p id="user-catalog-period" class="text-xs text-slate-500"></p>
                 </div>
 
                 <div class="overflow-x-auto rounded-lg border border-slate-200">
@@ -440,7 +449,7 @@
                                 <th class="py-3 px-4">Modelo</th>
                                 <th class="py-3 px-4">Sede</th>
                                 <th class="py-3 px-4">Aprobación</th>
-                                <th class="py-3 px-4">Reservas confirmadas</th>
+                                <th class="py-3 px-4">Disponibilidad y reservas</th>
                                 <th class="py-3 px-4 text-right">Acción</th>
                             </tr>
                         </thead>

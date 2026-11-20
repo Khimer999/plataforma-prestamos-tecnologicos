@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { pathToFileURL } from 'node:url';
+import { createUpdates } from './actualizaciones.mjs';
 import { checkSchema, createPool, createRepository, sessionSeconds } from './database.mjs';
 import { createAdmission, readLimits } from './limites.mjs';
 import { ApiError } from './reglas.mjs';
@@ -92,9 +93,7 @@ async function sendAsset(request, response, pathname, root, cache) {
     if (!item || !['GET', 'HEAD'].includes(request.method)) throw new ApiError(404, 'Página no encontrada.');
     const [file, contentType] = item;
     if (!cache.has(file)) {
-        const load = readFile(new URL(file, root)).then((content) => file === 'index.html'
-            ? Buffer.from(content.toString('utf8').replace(/(<meta\s+name="prestamos-api"\s+content=")[^"]*(")/, '$1/api$2'))
-            : content).catch((error) => {
+        const load = readFile(new URL(file, root)).catch((error) => {
             cache.delete(file);
             throw error;
         });
@@ -144,6 +143,7 @@ async function serveApi(request, response, pathname, repository, configuration, 
     if (method === 'GET') {
         switch (pathname) {
             case '/api/auth/sesion': return send(response, 200, actor);
+            case '/api/eventos': return configuration.updates.subscribe(response);
             case '/api/panel': {
                 const admin = actor.rol === 'admin';
                 const devices = await repository.devices();
@@ -197,10 +197,11 @@ function handleError(response, error) {
 export function buildServer(repository, {
     origin,
     publicRoot = new URL('./public/', import.meta.url),
-    limits = readLimits({})
+    limits = readLimits({}),
+    updates = createUpdates(repository)
 }) {
     const configuration = {
-        origin, limits, secure: new URL(origin).protocol === 'https:', throttle: createAuthThrottle(),
+        origin, limits, updates, secure: new URL(origin).protocol === 'https:', throttle: createAuthThrottle(),
         authenticate: createAdmission({ workers: limits.authWorkers, queueLimit: limits.authQueue, waitMs: 15_000 }),
         book: createAdmission({ workers: Math.min(8, Math.floor(limits.poolSize / 2)), queueLimit: limits.poolQueue, waitMs: 8_000 })
     };
@@ -240,7 +241,8 @@ async function start(env = process.env) {
         await checkSchema(pool);
         const repository = createRepository(pool);
         await repository.clearExpiredSessions();
-        const server = buildServer(repository, { origin: pageOrigin.origin, limits });
+        const updates = createUpdates(repository);
+        const server = buildServer(repository, { origin: pageOrigin.origin, limits, updates });
         const cleanup = setInterval(() => repository.clearExpiredSessions().catch((error) => {
             console.error('No se pudieron limpiar las sesiones caducadas', error.code || error.name);
         }), 60 * 60 * 1000).unref();
@@ -250,7 +252,10 @@ async function start(env = process.env) {
             server.listen(port, host, resolve);
         });
         console.log(`Plataforma de préstamos disponible en ${pageOrigin.origin}`);
-        const shutdown = () => server.close(() => void pool.end());
+        const shutdown = () => {
+            updates.close();
+            server.close(() => void pool.end());
+        };
         process.once('SIGINT', shutdown);
         process.once('SIGTERM', shutdown);
     } catch (error) {

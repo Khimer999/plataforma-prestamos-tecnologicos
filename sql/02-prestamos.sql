@@ -57,3 +57,11 @@ CREATE TABLE IF NOT EXISTS prestamos_sesiones (
     CONSTRAINT fk_prestamos_sesiones_usuario FOREIGN KEY (id_usuario) REFERENCES usuarios (id_usuario) ON DELETE CASCADE,
     INDEX idx_prestamos_sesiones_vencimiento (vence_en)
 ) ENGINE=InnoDB DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS prestamos_revision (
+    id TINYINT UNSIGNED NOT NULL PRIMARY KEY,
+    version BIGINT UNSIGNED NOT NULL DEFAULT 0,
+    CHECK (id = 1)
+) ENGINE=InnoDB;
+
+INSERT IGNORE INTO prestamos_revision (id, version) VALUES (1, 0);
