@@ -2,6 +2,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import argon2 from 'argon2';
 import mysql from 'mysql2/promise';
+import { readLimits } from './limites.mjs';
 import { ApiError, hasCapacity, requireId, requirePassword, requireText, validatePeriod } from './reglas.mjs';
 
 const sessionSeconds = 8 * 60 * 60;
@@ -35,7 +36,7 @@ const loanDetails = `SELECT CAST(l.id_prestamo AS CHAR) AS id, CAST(l.id_usuario
     JOIN productos d ON d.id_producto = l.id_producto
     LEFT JOIN prestamos_catalogo c ON c.id_producto = d.id_producto`;
 
-export function createPool(env = process.env) {
+export function createPool(env = process.env, limits = readLimits(env)) {
     if (!env.DB_USER) throw new Error('Configura DB_USER y DB_PASSWORD en el archivo .env.');
     const port = Number(env.DB_PORT || 3306);
     if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('El valor de DB_PORT no es válido.');
@@ -48,8 +49,8 @@ export function createPool(env = process.env) {
         ssl: env.DB_TLS_CA_FILE ? { ca: readFileSync(env.DB_TLS_CA_FILE), rejectUnauthorized: true, verifyIdentity: true } : undefined,
         charset: 'UTF8MB4_UNICODE_CI',
         timezone: 'Z',
-        connectionLimit: 8,
-        queueLimit: 50,
+        connectionLimit: limits.poolSize,
+        queueLimit: limits.poolQueue,
         connectTimeout: 5000
     });
 }
@@ -66,6 +67,7 @@ export async function checkSchema(pool) {
 async function transaction(pool, action) {
     const connection = await pool.getConnection();
     try {
+        await connection.query('SET SESSION innodb_lock_wait_timeout = 3');
         await connection.query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED');
         await connection.beginTransaction();
         const result = await action(connection);
@@ -109,8 +111,10 @@ async function lockProduct(connection, id) {
 
 async function checkAvailability(connection, { id, product, start, end }) {
     if (product.estado !== 1 || product.stock < 1) throw new ApiError(409, 'El dispositivo seleccionado ya no está disponible.');
+    // El bloqueo del producto serializa las confirmaciones. Una reserva solapada dura como máximo 72 horas.
     const [reservations] = await connection.execute(`SELECT fecha_inicio AS fechaInicio, fecha_fin AS fechaFin FROM prestamos
-        WHERE id_producto = ? AND estado = 'Confirmado' AND fecha_inicio < ? AND fecha_fin > ? FOR UPDATE`, [id, end, start]);
+        WHERE id_producto = ? AND estado = 'Confirmado' AND fecha_inicio < ?
+          AND fecha_inicio > DATE_SUB(?, INTERVAL 72 HOUR) AND fecha_fin > ?`, [id, end, start, start]);
     if (!hasCapacity({ start, end, reservations, stock: product.stock })) {
         throw new ApiError(409, 'Todas las unidades están reservadas en ese horario. Elige otra franja o equipo.');
     }
@@ -146,7 +150,9 @@ export function createRepository(pool) {
             const login = requireText(body.identificador, 'correo o usuario', 254);
             const password = requirePassword(body.password, 1);
             const [rows] = await pool.execute(`SELECT ${profileColumns}, u.password_hash AS hash FROM ${profileTables}
-                WHERE u.estado = 1 AND (u.usuario = ? OR p.correo = ?) LIMIT 2`, [login, login]);
+                JOIN (SELECT id_usuario FROM usuarios WHERE usuario = ?
+                      UNION SELECT id_usuario FROM prestamos_perfiles WHERE correo = ?) AS matching ON matching.id_usuario = u.id_usuario
+                WHERE u.estado = 1 LIMIT 2`, [login, login]);
             const { hash, ...profile } = rows.length === 1 ? rows[0] : {};
             let valid = false;
             if (typeof hash === 'string' && /^\$argon2(?:id|i|d)\$/.test(hash)) {
@@ -158,11 +164,17 @@ export function createRepository(pool) {
             if (!valid) throw new ApiError(401, 'Verifica el correo o usuario y la contraseña.');
             const token = randomBytes(32).toString('base64url');
             const expiresAt = new Date(Date.now() + sessionSeconds * 1000);
-            await transaction(pool, async (connection) => {
-                if (previousToken) await connection.execute('DELETE FROM prestamos_sesiones WHERE token_hash = ?', [hashedToken(previousToken)]);
-                await connection.execute(`INSERT INTO prestamos_sesiones (token_hash, id_usuario, vence_en) VALUES (?, ?, ?)`,
-                    [hashedToken(token), profile.id, expiresAt]);
-            });
+            const save = (connection) => connection.execute(
+                'INSERT INTO prestamos_sesiones (token_hash, id_usuario, vence_en) VALUES (?, ?, ?)',
+                [hashedToken(token), profile.id, expiresAt]);
+            if (previousToken) {
+                await transaction(pool, async (connection) => {
+                    await connection.execute('DELETE FROM prestamos_sesiones WHERE token_hash = ?', [hashedToken(previousToken)]);
+                    await save(connection);
+                });
+            } else {
+                await save(pool);
+            }
             return { token, profile };
         },
         async currentUser(token) {

@@ -44,3 +44,23 @@ Ejecuta las migraciones con una cuenta de instalación. Para la cuenta del servi
 Si el proveedor exige un certificado para TLS, configura `DB_TLS_CA_FILE` con la ruta al certificado de la entidad emisora.
 
 El fondo de nebulosa de `public/assets/nebula.webp` fue generado para esta interfaz. Los seis tonos principales provienen de la paleta de referencia.
+
+## Acceso desde varios dispositivos
+
+Sirve la aplicación en una dirección HTTPS accesible para los dispositivos y usa esa dirección como `APP_ORIGIN`. Todos los procesos de la API deben usar la misma base MariaDB o MySQL. Las cuentas, las sesiones y los préstamos se guardan allí. Cada dispositivo inicia su propia sesión. El acceso al archivo `public/index.html` sigue siendo la demostración independiente del navegador.
+
+La API limita el trabajo con contraseñas y la cantidad de escrituras simultáneas para conservar conexiones de lectura. Si la cola se llena o vence, responde `503` con un aviso de servicio ocupado. Al confirmar un préstamo, el bloqueo del producto en InnoDB hace que todos los procesos comprueben el stock en orden. Una franja sin unidades disponibles responde `409`.
+
+`DB_POOL_SIZE` fija el máximo de conexiones por proceso. Cuenta las conexiones de todas las instancias al dimensionar la base. `DB_QUEUE_LIMIT` y `AUTH_QUEUE_LIMIT` acotan la espera. `AUTH_CONCURRENCY` limita las operaciones simultáneas con contraseñas y `AUTH_REQUESTS_PER_IP` admite ráfagas legítimas desde direcciones compartidas.
+
+## Prueba de concurrencia
+
+Inicia la aplicación con una base local de pruebas que tenga al menos un equipo estándar disponible. El script crea cuentas y préstamos ficticios en esa base y conserva los registros para poder revisarlos.
+
+```sh
+node scripts/carga.mjs --url http://127.0.0.1:3000 --confirm-isolated --users 100 --concurrency 100 --rounds 2 --panel --report carga.json
+```
+
+El informe incluye p50, p95 y p99 por operación, códigos HTTP, préstamos confirmados y persistencia en sesiones nuevas. La prueba intenta reservar el mismo equipo en una sola franja y luego crea un préstamo por usuario en franjas distintas. Agrega `--second-url http://127.0.0.1:3001` con el segundo servidor ya iniciado para repartir las reservas y verificar la persistencia desde otro proceso conectado a la misma base.
+
+En una prueba local con MariaDB 11.4 y dos procesos, los 100 usuarios se registraron, iniciaron sesión y recuperaron sus 100 reservas individuales desde sesiones nuevas. Cuando todos solicitaron la misma unidad en el mismo horario, se confirmó una reserva y las otras 99 recibieron la respuesta de cupo agotado. El p95 fue de 4,7 s para el registro, de 4,9 a 8,8 s para el inicio de sesión bajo las dos ráfagas y de 3,2 s para guardar una reserva individual. Estos tiempos corresponden al equipo de prueba con dos CPU lógicas y 12 GiB de memoria.

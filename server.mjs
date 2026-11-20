@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { pathToFileURL } from 'node:url';
 import { checkSchema, createPool, createRepository, sessionSeconds } from './database.mjs';
+import { createAdmission, readLimits } from './limites.mjs';
 import { ApiError } from './reglas.mjs';
 
 const staticFiles = new Map([
@@ -66,40 +67,47 @@ function readBody(request) {
 function createAuthThrottle() {
     const attempts = new Map();
     const windowMs = 10 * 60 * 1000;
-    return (request, route, response) => {
+    let pruneAt = 0;
+    return (key, maximum, response) => {
         const now = Date.now();
-        const key = `${route}|${request.socket.remoteAddress}`;
-        if (attempts.size >= 4096) {
+        if (now >= pruneAt) {
             for (const [id, attempt] of attempts) if (attempt.until <= now) attempts.delete(id);
-            if (attempts.size >= 4096 && !attempts.has(key)) throw new ApiError(429, 'Intenta de nuevo en unos minutos.');
+            pruneAt = now + 30_000;
         }
         let attempt = attempts.get(key);
         if (!attempt || attempt.until <= now) {
+            if (!attempt && attempts.size >= 8192) throw new ApiError(503, 'El servicio de acceso está ocupado.');
             attempt = { count: 0, until: now + windowMs };
             attempts.set(key, attempt);
         }
         attempt.count += 1;
-        if (attempt.count <= (route === '/api/auth/registro' ? 15 : 40)) return;
+        if (attempt.count <= maximum) return;
         response.setHeader('Retry-After', Math.ceil((attempt.until - now) / 1000));
         throw new ApiError(429, 'Demasiados intentos. Intenta de nuevo en unos minutos.');
     };
 }
 
-async function sendAsset(request, response, pathname, root) {
+async function sendAsset(request, response, pathname, root, cache) {
     const item = staticFiles.get(pathname);
     if (!item || !['GET', 'HEAD'].includes(request.method)) throw new ApiError(404, 'Página no encontrada.');
     const [file, contentType] = item;
-    let content = await readFile(new URL(file, root));
-    if (file === 'index.html') {
-        content = Buffer.from(content.toString('utf8').replace(/(<meta\s+name="prestamos-api"\s+content=")[^"]*(")/, '$1/api$2'));
+    if (!cache.has(file)) {
+        const load = readFile(new URL(file, root)).then((content) => file === 'index.html'
+            ? Buffer.from(content.toString('utf8').replace(/(<meta\s+name="prestamos-api"\s+content=")[^"]*(")/, '$1/api$2'))
+            : content).catch((error) => {
+            cache.delete(file);
+            throw error;
+        });
+        cache.set(file, load);
     }
+    const content = await cache.get(file);
     response.setHeader('Content-Type', contentType);
     response.setHeader('Content-Length', content.length);
     response.setHeader('Cache-Control', file === 'index.html' ? 'no-store' : 'public, max-age=300');
     response.end(request.method === 'HEAD' ? undefined : content);
 }
 
-async function serveApi(request, response, pathname, repository, configuration, throttle) {
+async function serveApi(request, response, pathname, repository, configuration, signal) {
     const method = request.method;
     const token = sessionToken(request);
     response.setHeader('Cache-Control', 'no-store');
@@ -107,14 +115,21 @@ async function serveApi(request, response, pathname, repository, configuration, 
         throw new ApiError(403, 'La solicitud debe enviarse desde la aplicación.');
     }
 
-    if (method === 'POST' && pathname === '/api/auth/registro') {
-        throttle(request, pathname, response);
-        await repository.register(await readBody(request));
-        return send(response, 204);
-    }
-    if (method === 'POST' && pathname === '/api/auth/sesion') {
-        throttle(request, pathname, response);
-        const { profile, token: newToken } = await repository.login(await readBody(request), token);
+    if (method === 'POST' && ['/api/auth/registro', '/api/auth/sesion'].includes(pathname)) {
+        const registering = pathname === '/api/auth/registro';
+        const address = request.socket.remoteAddress;
+        configuration.throttle(`${pathname}|${address}`, configuration.limits.authPerAddress, response);
+        const body = await readBody(request);
+        const login = body[registering ? 'correo' : 'identificador'];
+        if (typeof login === 'string' && login.trim()) {
+            const key = login.trim().toLowerCase().slice(0, 254);
+            configuration.throttle(`${pathname}|${address}|${key}`, 12, response);
+        }
+        if (registering) {
+            await configuration.authenticate(signal, () => repository.register(body));
+            return send(response, 204);
+        }
+        const { profile, token: newToken } = await configuration.authenticate(signal, () => repository.login(body, token));
         setSessionCookie(response, newToken, configuration.secure);
         return send(response, 200, profile);
     }
@@ -129,6 +144,14 @@ async function serveApi(request, response, pathname, repository, configuration, 
     if (method === 'GET') {
         switch (pathname) {
             case '/api/auth/sesion': return send(response, 200, actor);
+            case '/api/panel': {
+                const admin = actor.rol === 'admin';
+                const devices = await repository.devices();
+                const loans = await repository.loans(actor);
+                const availability = admin ? [] : await repository.availability();
+                const users = admin ? await repository.users() : [];
+                return send(response, 200, { devices, loans, availability, users });
+            }
             case '/api/dispositivos': return send(response, 200, await repository.devices());
             case '/api/disponibilidad': return send(response, 200, await repository.availability());
             case '/api/prestamos': return send(response, 200, await repository.loans(actor));
@@ -138,21 +161,33 @@ async function serveApi(request, response, pathname, repository, configuration, 
         }
     }
     if (method === 'POST' && pathname === '/api/prestamos') {
-        return send(response, 201, await repository.createLoan(await readBody(request), actor));
+        const body = await readBody(request);
+        return send(response, 201, await configuration.book(signal, () => repository.createLoan(body, actor)));
     }
     const loanRoute = /^\/api\/prestamos\/([^/]+)$/.exec(pathname);
     if (method === 'PATCH' && loanRoute) {
-        const loan = await repository.decideLoan(loanRoute[1], await readBody(request), actor);
+        if (actor.rol !== 'admin') throw new ApiError(403, 'La decisión requiere una cuenta de administrador.');
+        const body = await readBody(request);
+        const loan = await configuration.book(signal, () => repository.decideLoan(loanRoute[1], body, actor));
         return send(response, 200, loan);
     }
     throw new ApiError(404, 'Ruta del servicio no encontrada.');
 }
 
 function handleError(response, error) {
-    if (error instanceof ApiError) return send(response, error.status, { message: error.message });
+    if (response.destroyed) return;
+    if (error instanceof ApiError) {
+        if (error.status === 503) response.setHeader('Retry-After', '2');
+        return send(response, error.status, { message: error.message });
+    }
     if (error.code === 'ER_DUP_ENTRY') return send(response, 409, { message: 'El correo, usuario o documento ya está registrado.' });
-    if (['ER_LOCK_DEADLOCK', 'ER_LOCK_WAIT_TIMEOUT'].includes(error.code)) {
-        return send(response, 409, { message: 'Otro cambio llegó al mismo tiempo. Intenta de nuevo.' });
+    if (['ER_LOCK_DEADLOCK', 'ER_LOCK_WAIT_TIMEOUT', 'ER_CON_COUNT_ERROR'].includes(error.code)
+        || error.message === 'Queue limit reached.') {
+        response.setHeader('Retry-After', '2');
+        return send(response, 503, { message: 'El servicio está ocupado. Intenta de nuevo en unos segundos.' });
+    }
+    if (['ECONNREFUSED', 'ETIMEDOUT', 'ECONNRESET', 'PROTOCOL_CONNECTION_LOST', 'EPIPE'].includes(error.code)) {
+        return send(response, 503, { message: 'La base de datos no responde. Consulta tus registros al recuperar la conexión.' });
     }
     if (error.code === 'ENOENT') return send(response, 404, { message: 'Archivo de la aplicación no encontrado.' });
     console.error('Error interno del servicio', error.code || error.name);
@@ -161,18 +196,28 @@ function handleError(response, error) {
 
 export function buildServer(repository, {
     origin,
-    publicRoot = new URL('./public/', import.meta.url)
+    publicRoot = new URL('./public/', import.meta.url),
+    limits = readLimits({})
 }) {
-    const configuration = { origin, secure: new URL(origin).protocol === 'https:' };
-    const throttle = createAuthThrottle();
+    const configuration = {
+        origin, limits, secure: new URL(origin).protocol === 'https:', throttle: createAuthThrottle(),
+        authenticate: createAdmission({ workers: limits.authWorkers, queueLimit: limits.authQueue, waitMs: 15_000 }),
+        book: createAdmission({ workers: Math.min(8, Math.floor(limits.poolSize / 2)), queueLimit: limits.poolQueue, waitMs: 8_000 })
+    };
+    const assets = new Map();
     return createServer({ requestTimeout: 30_000, headersTimeout: 15_000 }, async (request, response) => {
         response.setHeader('X-Content-Type-Options', 'nosniff');
         response.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
         response.setHeader('Content-Security-Policy', "default-src 'none'; base-uri 'none'; frame-ancestors 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; form-action 'self'");
         try {
             const pathname = new URL(request.url, configuration.origin).pathname;
-            if (pathname.startsWith('/api/')) await serveApi(request, response, pathname, repository, configuration, throttle);
-            else await sendAsset(request, response, pathname, publicRoot);
+            if (pathname.startsWith('/api/')) {
+                const client = new AbortController();
+                response.once('close', () => {
+                    if (!response.writableFinished) client.abort();
+                });
+                await serveApi(request, response, pathname, repository, configuration, client.signal);
+            } else await sendAsset(request, response, pathname, publicRoot, assets);
         } catch (error) {
             handleError(response, error);
         }
@@ -189,12 +234,13 @@ async function start(env = process.env) {
         throw new Error('APP_ORIGIN debe ser una URL http o https del sitio, sin ruta ni parámetros.');
     }
 
-    const pool = createPool(env);
+    const limits = readLimits(env);
+    const pool = createPool(env, limits);
     try {
         await checkSchema(pool);
         const repository = createRepository(pool);
         await repository.clearExpiredSessions();
-        const server = buildServer(repository, { origin: pageOrigin.origin });
+        const server = buildServer(repository, { origin: pageOrigin.origin, limits });
         const cleanup = setInterval(() => repository.clearExpiredSessions().catch((error) => {
             console.error('No se pudieron limpiar las sesiones caducadas', error.code || error.name);
         }), 60 * 60 * 1000).unref();

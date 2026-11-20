@@ -370,14 +370,7 @@ function createApiRepository(basePath) {
         login: (identificador, password) => request("/auth/sesion", "POST", { identificador, password }),
         logout: () => request("/auth/sesion", "DELETE", undefined, true),
         register: (fields) => request("/auth/registro", "POST", fields),
-        async panel(actor) {
-            const admin = actor.rol === "admin";
-            const [devices, loans, availability, users] = await Promise.all([
-                request("/dispositivos"), request("/prestamos"),
-                admin ? [] : request("/disponibilidad"), admin ? request("/usuarios") : []
-            ]);
-            return { devices, loans, availability, users };
-        },
+        panel: () => request("/panel"),
         createLoan: (input) => request("/prestamos", "POST", input),
         decideLoan: (id, updates) => request(`/prestamos/${encodeURIComponent(id)}`, "PATCH", updates)
     };
